@@ -2,6 +2,7 @@ import argparse
 import numpy as np
 import re
 import tabulate
+import subprocess
 np.set_printoptions(suppress=True, precision=4)
 
 parser = argparse.ArgumentParser()
@@ -43,7 +44,6 @@ total_data = clock_data.astype(np.float32)
 per_iter_data = total_data / count_data
 
 total_per_point = np.mean(total_data, axis=0)
-cum_percent = total_per_point / np.sum(total_per_point) * 100
 counts_per_point = np.mean(count_data.astype(np.float32), axis=0)
 mean_per_iter = np.mean(per_iter_data, axis=0)
 std_per_iter = np.std(per_iter_data, axis=0)
@@ -51,8 +51,34 @@ std_per_iter = np.std(per_iter_data, axis=0)
 sortedtotals = sorted([(total_per_point[i], i) for i in range(len(total_per_point))], reverse=True)
 
 print(tabulate.tabulate(
-    [(x[1], f'{names[x[1]]}', f'{lines[x[1]]}', f"{cum_percent[x[1]]:.2f}%", f"{x[0]:.2f}", f"{counts_per_point[x[1]]:.2f}", f"{mean_per_iter[x[1]]:.2f}", f"{std_per_iter[x[1]]:.2f}") for x in sortedtotals if counts_per_point[x[1]]>0],
-    headers=['ID #', 'Name', 'Line #', 'Frac', 'Mean cycles', 'Mean Count', 'Mean cycles/iter', 'Stddev cycles/iter'],
+    [(x[1], f'{names[x[1]]}', f'{lines[x[1]]}', f"{x[0]:.2f}", f"{counts_per_point[x[1]]:.2f}", f"{mean_per_iter[x[1]]:.2f}", f"{std_per_iter[x[1]]:.2f}") for x in sortedtotals if counts_per_point[x[1]]>0],
+    headers=['ID #', 'Name', 'Line #', 'Mean cycles', 'Mean Count', 'Mean cycles/iter', 'Stddev cycles/iter'],
     stralign="right",
     disable_numparse=True
 ))
+print(f'Total mean cycles per warp: {total_per_point.sum():,}')
+print(f'# of warps in data: {total_data.shape[0]}')
+print(f'Total mean cycles per quadrant: {total_data.sum() / (128*4):,}')
+
+try:
+    cmd = "nvidia-smi --query-gpu=gpu_name,index,clocks.max.sm --format=csv,noheader,nounits"
+    # Execute the command
+    result = subprocess.run(cmd, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    # Get the output and split it into lines
+    output = result.stdout.strip().split('\n')
+    if output:
+        # Parse the first GPU's clock speed from the first line
+        first_gpu_info = output[0].split(', ')
+        if len(first_gpu_info) == 3:
+            _, _, clock_speed_mhz = first_gpu_info
+            # Convert clock speed from MHz to Hz
+            clock_speed_hz = int(clock_speed_mhz) * 1000000
+            print(f'Estimated us per warp: {total_per_point.sum() / clock_speed_hz * 100000:.2f}')
+            print(f'Estimated us per quadrant: {total_data.sum() / (128*4) / clock_speed_hz * 100000:.2f}')
+        else:
+            print("Failed to parse GPU clock speed.")
+    else:
+        print("Failed to parse GPU clock speed.")
+except subprocess.CalledProcessError as e:
+    print(f"Failed to run nvidia-smi: {e}")
+
